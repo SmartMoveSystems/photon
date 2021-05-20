@@ -174,6 +174,8 @@ public class App {
         }
 
         // setup search API
+        get("add", new AddHandler("api", esNodeClient, args.getLanguages(), args.getDefaultLanguage()));
+        get("add/", new AddHandler("api/", esNodeClient, args.getLanguages(), args.getDefaultLanguage()));
         get("api", new SearchRequestHandler("api", esNodeClient, args.getLanguages(), args.getDefaultLanguage()));
         get("api/", new SearchRequestHandler("api/", esNodeClient, args.getLanguages(), args.getDefaultLanguage()));
         get("reverse", new ReverseSearchRequestHandler("reverse", esNodeClient, args.getLanguages(), args.getDefaultLanguage()));
