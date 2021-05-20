@@ -16,7 +16,9 @@ public class BoundingBoxParamConverter {
     public Envelope apply(Request webRequest) throws BadRequestException {
         String bboxParam = webRequest.queryParams("bbox");
         if (bboxParam == null) {
-            return null;
+            // Override to force a BBox of Australia
+            bboxParam = "113.338953078,-46.641235447,178.517093541,-10.6681857235";
+//            return null;
         }
         Envelope bbox = null;
         try {
