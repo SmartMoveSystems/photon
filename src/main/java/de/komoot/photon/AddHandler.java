@@ -202,7 +202,8 @@ public class AddHandler<R extends PhotonRequest> extends RouteImpl
       boolean test = false;
 //      importOpenAddress("G:\\OSM\\2021-02-25\\nz-street-address.csv", ImportType.NZ, CountryCode.NZ, "", test);
 //      importOpenAddress("G:\\OSM\\2021-02-25\\countrywide.csv", ImportType.GNAF, CountryCode.AU, "", test);
-      importOpenAddress("/mnt/g/OSM/2021-02-25/countrywide.csv", ImportType.GNAF, CountryCode.AU, "", test);
+      importOpenAddress("/mnt/g/OSM/2021-05-20/nz-street-address.csv", ImportType.NZ, CountryCode.NZ, "", test);
+      importOpenAddress("/mnt/g/OSM/2021-05-20/countrywide.csv", ImportType.GNAF, CountryCode.AU, "", test);
 
       // Loop through all the USA csv files that can be found
 //      int fileCount = 1;
