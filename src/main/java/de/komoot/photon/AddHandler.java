@@ -1,30 +1,34 @@
 package de.komoot.photon;
 
-import static spark.Spark.halt;
+import com.vividsolutions.jts.geom.Coordinate;
+import com.vividsolutions.jts.geom.GeometryFactory;
+import com.vividsolutions.jts.geom.Point;
+import com.vividsolutions.jts.geom.PrecisionModel;
+import de.komoot.photon.elasticsearch.Server;
+import de.komoot.photon.query.BadRequestException;
+import de.komoot.photon.query.PhotonRequest;
+import de.komoot.photon.query.PhotonRequestFactory;
+import de.komoot.photon.searcher.GeocodeJsonFormatter;
+import de.komoot.photon.searcher.PhotonResult;
+import de.komoot.photon.searcher.SearchHandler;
+import de.komoot.photon.searcher.StreetDupesRemover;
+import lombok.extern.slf4j.Slf4j;
+import org.json.JSONObject;
+import spark.Request;
+import spark.Response;
+import spark.RouteImpl;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
 
-import org.elasticsearch.client.Client;
-import org.json.JSONObject;
-
-import com.neovisionaries.i18n.CountryCode;
-import com.vividsolutions.jts.geom.*;
-
-import de.komoot.photon.query.BadRequestException;
-import de.komoot.photon.query.PhotonRequest;
-import de.komoot.photon.query.PhotonRequestFactory;
-import de.komoot.photon.searcher.BaseElasticsearchSearcher;
-import de.komoot.photon.searcher.PhotonRequestHandler;
-import de.komoot.photon.utils.ConvertToGeoJson;
-import lombok.extern.slf4j.Slf4j;
-import spark.Request;
-import spark.Response;
-import spark.RouteImpl;
+import static spark.Spark.halt;
 
 @Slf4j
 public class AddHandler<R extends PhotonRequest> extends RouteImpl
@@ -32,24 +36,31 @@ public class AddHandler<R extends PhotonRequest> extends RouteImpl
    private static final String DEBUG_PARAMETER = "debug";
 
    private final PhotonRequestFactory photonRequestFactory;
-   private final PhotonRequestHandler requestHandler;
-   private final ConvertToGeoJson geoJsonConverter;
-   private String languages = "en";
-   private Client esNodeClient;
+   private final SearchHandler requestHandler;
+   private final Server server;
+   private final String[] languages;
 
-   AddHandler(String path, Client esNodeClient, String thisLanguages, String defaultLanguage)
-   {
+   AddHandler(String path, Server server, String[] languages, String defaultLanguage) {
       super(path);
-      this.esNodeClient = esNodeClient;
-      List<String> supportedLanguages = Arrays.asList(languages.split(","));
+      this.server = server;
+      this.languages = languages;
+      List<String> supportedLanguages = Arrays.asList(languages);
       this.photonRequestFactory = new PhotonRequestFactory(supportedLanguages, defaultLanguage);
-      this.geoJsonConverter = new ConvertToGeoJson();
-      this.requestHandler = new PhotonRequestHandler(new BaseElasticsearchSearcher(esNodeClient), supportedLanguages);
+      this.requestHandler = server.createSearchHandler(languages);
    }
 
+//   AddHandler(String path, Client esNodeClient, String thisLanguages, String defaultLanguage)
+//   {
+//      super(path);
+//      this.esNodeClient = esNodeClient;
+//      List<String> supportedLanguages = Arrays.asList(languages.split(","));
+//      this.photonRequestFactory = new PhotonRequestFactory(supportedLanguages, defaultLanguage);
+//      this.geoJsonConverter = new ConvertToGeoJson();
+//      this.requestHandler = new PhotonRequestHandler(new BaseElasticsearchSearcher(esNodeClient), supportedLanguages);
+//   }
+
    @Override
-   public String handle(Request request, Response response)
-   {
+   public String handle(Request request, Response response) {
       PhotonRequest photonRequest = null;
       try {
          photonRequest = photonRequestFactory.create(request);
@@ -58,22 +69,54 @@ public class AddHandler<R extends PhotonRequest> extends RouteImpl
          json.put("message", e.getMessage());
          halt(e.getHttpStatus(), json.toString());
       }
-      List<JSONObject> results = requestHandler.handle(photonRequest);
-      JSONObject geoJsonResults = geoJsonConverter.convert(results);
 
-      importOpenAddress();
-      if (photonRequest.getDebug()) {
-         JSONObject debug = new JSONObject();
-         debug.put("query", new JSONObject(requestHandler.dumpQuery(photonRequest)));
-         geoJsonResults.put("debug", debug);
-         return geoJsonResults.toString(4);
+      List<PhotonResult> results = requestHandler.search(photonRequest);
+
+      // Futher filtering
+      results = new StreetDupesRemover(photonRequest.getLanguage()).execute(results);
+
+      // Restrict to the requested limit.
+      if (results.size() > photonRequest.getLimit()) {
+         results = results.subList(0, photonRequest.getLimit());
       }
 
-      return geoJsonResults.toString();
+      importOpenAddress();
+
+      String debugInfo = null;
+      if (photonRequest.getDebug()) {
+         debugInfo = requestHandler.dumpQuery(photonRequest);
+      }
+
+      return new GeocodeJsonFormatter(photonRequest.getDebug(), photonRequest.getLanguage()).convert(results, debugInfo);
    }
 
+//   @Override
+//   public String handle(Request request, Response response)
+//   {
+//      PhotonRequest photonRequest = null;
+//      try {
+//         photonRequest = photonRequestFactory.create(request);
+//      } catch (BadRequestException e) {
+//         JSONObject json = new JSONObject();
+//         json.put("message", e.getMessage());
+//         halt(e.getHttpStatus(), json.toString());
+//      }
+//      List<JSONObject> results = requestHandler.handle(photonRequest);
+//      JSONObject geoJsonResults = geoJsonConverter.convert(results);
+//
+//      importOpenAddress();
+//      if (photonRequest.getDebug()) {
+//         JSONObject debug = new JSONObject();
+//         debug.put("query", new JSONObject(requestHandler.dumpQuery(photonRequest)));
+//         geoJsonResults.put("debug", debug);
+//         return geoJsonResults.toString(4);
+//      }
+//
+//      return geoJsonResults.toString();
+//   }
+
    private PhotonDoc getDocument(String prefix, String streetStr, String cityStr, String stateStr, 
-      String postcode, double latitude, double longitude, long id, CountryCode countryCode)
+      String postcode, double latitude, double longitude, long id, String countryCode)
    {
       GeometryFactory geometryFactory = new GeometryFactory(new PrecisionModel(), 4326);
       Point point = geometryFactory.createPoint(new Coordinate(longitude, latitude));
@@ -87,7 +130,7 @@ public class AddHandler<R extends PhotonRequest> extends RouteImpl
          "house"); // String tagValue
       doc.houseNumber(prefix);
       doc.centroid(point);
-      doc.countryCode(countryCode.getAlpha2());
+      doc.countryCode(countryCode);
       doc.postcode(postcode);
 
       HashMap<String, String> address = new HashMap<>();
@@ -201,9 +244,9 @@ public class AddHandler<R extends PhotonRequest> extends RouteImpl
    {
       boolean test = false;
 //      importOpenAddress("G:\\OSM\\2021-02-25\\nz-street-address.csv", ImportType.NZ, CountryCode.NZ, "", test);
-//      importOpenAddress("G:\\OSM\\2021-02-25\\countrywide.csv", ImportType.GNAF, CountryCode.AU, "", test);
-      importOpenAddress("/mnt/g/OSM/2021-05-20/nz-street-address.csv", ImportType.NZ, CountryCode.NZ, "", test);
-      importOpenAddress("/mnt/g/OSM/2021-05-20/countrywide.csv", ImportType.GNAF, CountryCode.AU, "", test);
+      importOpenAddress("G:\\OSM\\2021-02-25\\countrywide.csv", ImportType.GNAF, "AU", "", test);
+//      importOpenAddress("/mnt/g/OSM/2021-05-20/nz-street-address.csv", ImportType.NZ, "NZ", "", test);
+//      importOpenAddress("/mnt/g/OSM/2021-05-20/countrywide.csv", ImportType.GNAF, "AU", "", test);
 
       // Loop through all the USA csv files that can be found
 //      int fileCount = 1;
@@ -221,7 +264,7 @@ public class AddHandler<R extends PhotonRequest> extends RouteImpl
    
    private int total = 0;
    
-   public void importOpenAddress(String file, ImportType type, CountryCode countryCode, String state, boolean test)
+   public void importOpenAddress(String file, ImportType type, String countryCode, String state, boolean test)
    {
 
       try
@@ -231,7 +274,8 @@ public class AddHandler<R extends PhotonRequest> extends RouteImpl
          BufferedReader reader = new BufferedReader(new FileReader(file));
          log.info("Starting Import");
 
-         de.komoot.photon.elasticsearch.Importer importer = new de.komoot.photon.elasticsearch.Importer(esNodeClient, languages, "");
+         //de.komoot.photon.elasticsearch.Importer importer = new de.komoot.photon.elasticsearch.Importer(esClient, languages, "");
+         Importer importer = this.server.createImporter(languages, new String[]{});
          log.info("Starting Importer");
 
          String line = reader.readLine();

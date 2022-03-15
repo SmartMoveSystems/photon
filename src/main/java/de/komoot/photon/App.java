@@ -162,6 +162,8 @@ public class App {
 
         // setup search API
         String[] langs = dbProperties.getLanguages();
+        get("add", new AddHandler("api", server, langs, args.getDefaultLanguage()));
+        get("add/", new AddHandler("api/", server, langs, args.getDefaultLanguage()));
         get("api", new SearchRequestHandler("api", server.createSearchHandler(langs), langs, args.getDefaultLanguage()));
         get("api/", new SearchRequestHandler("api/", server.createSearchHandler(langs), langs, args.getDefaultLanguage()));
         get("reverse", new ReverseSearchRequestHandler("reverse", server.createReverseHandler(), dbProperties.getLanguages(), args.getDefaultLanguage()));
