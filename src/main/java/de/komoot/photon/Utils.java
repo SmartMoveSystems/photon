@@ -1,19 +1,12 @@
 package de.komoot.photon;
 
-import com.google.common.base.Joiner;
-import com.google.common.collect.HashMultimap;
-import com.google.common.collect.SetMultimap;
-import com.neovisionaries.i18n.CountryCode;
 import com.vividsolutions.jts.geom.Envelope;
 import de.komoot.photon.nominatim.model.AddressType;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
 
 import java.io.IOException;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 /**
  * helper functions to create convert a photon document to XContentBuilder object / JSON
@@ -21,8 +14,6 @@ import java.util.Set;
  * @author christoph
  */
 public class Utils {
-    private static final Joiner commaJoiner = Joiner.on(", ").skipNulls();
-
     public static XContentBuilder convert(PhotonDoc doc, String[] languages, String[] extraTags) throws IOException {
         final AddressType atype = doc.getAddressType();
         XContentBuilder builder = XContentFactory.jsonBuilder().startObject()
@@ -32,6 +23,11 @@ public class Utils {
                 .field(Constants.OSM_VALUE, doc.getTagValue())
                 .field(Constants.OBJECT_TYPE, atype == null ? "locality" : atype.getName())
                 .field(Constants.IMPORTANCE, doc.getImportance());
+
+        String classification = buildClassificationString(doc.getTagKey(), doc.getTagValue());
+        if (classification != null) {
+            builder.field(Constants.CLASSIFICATION, classification);
+        }
 
         if (doc.getCentroid() != null) {
             builder.startObject("coordinate")
@@ -52,9 +48,9 @@ public class Utils {
         for (Map.Entry<AddressType, Map<String, String>> entry : doc.getAddressParts().entrySet()) {
             writeIntlNames(builder, entry.getValue(), entry.getKey().getName(), languages);
         }
-        CountryCode countryCode = doc.getCountryCode();
+        String countryCode = doc.getCountryCode();
         if (countryCode != null)
-            builder.field(Constants.COUNTRYCODE, countryCode.getAlpha2());
+            builder.field(Constants.COUNTRYCODE, countryCode);
         writeContext(builder, doc.getContext(), languages);
         writeExtraTags(builder, doc.getExtratags(), extraTags);
         writeExtent(builder, doc.getBbox());
@@ -136,27 +132,24 @@ public class Utils {
     }
 
     protected static void writeContext(XContentBuilder builder, Set<Map<String, String>> contexts, String[] languages) throws IOException {
-        final SetMultimap<String, String> multimap = HashMultimap.create();
+        final Map<String, Set<String>> multimap = new HashMap<>();
 
         for (Map<String, String> context : contexts) {
             if (context.get("name") != null) {
-                multimap.put("default", context.get("name"));
+                multimap.computeIfAbsent("default", k -> new HashSet<>()).add(context.get("name"));
             }
-        }
 
-        for (String language : languages) {
-            for (Map<String, String> context : contexts) {
+            for (String language : languages) {
                 if (context.get("name:" + language) != null) {
-                    multimap.put(language, context.get("name:" + language));
+                    multimap.computeIfAbsent("default", k -> new HashSet<>()).add(context.get("name:" + language));
                 }
             }
         }
 
-        final Map<String, Collection<String>> map = multimap.asMap();
         if (!multimap.isEmpty()) {
             builder.startObject("context");
-            for (Map.Entry<String, Collection<String>> entry : map.entrySet()) {
-                builder.field(entry.getKey(), commaJoiner.join(entry.getValue()));
+            for (Map.Entry<String, Set<String>> entry : multimap.entrySet()) {
+                builder.field(entry.getKey(), String.join(", ", entry.getValue()));
             }
             builder.endObject();
         }
@@ -199,5 +192,27 @@ public class Utils {
             }
         }
         return sb.toString();
+    }
+
+    public static String buildClassificationString(String key, String value) {
+        if ("place".equals(key) || "building".equals(key)) {
+            return null;
+        }
+
+        if ("highway".equals(key)
+            && ("unclassified".equals(value) || "residential".equals(value))) {
+            return null;
+        }
+
+        for (char c : value.toCharArray()) {
+            if (!(c == '_'
+                  || ((c >= 'a') && (c <= 'z'))
+                  || ((c >= 'A') && (c <= 'Z'))
+                  || ((c >= '0') && (c <= '9')))) {
+                return null;
+            }
+        }
+
+        return "tpfld" + value.replaceAll("_", "").toLowerCase() + "clsfld" + key.replaceAll("_", "").toLowerCase();
     }
 }

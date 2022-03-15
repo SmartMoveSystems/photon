@@ -1,20 +1,18 @@
 package de.komoot.photon;
 
-import com.google.common.collect.ImmutableMap;
 import com.vividsolutions.jts.geom.Coordinate;
 import com.vividsolutions.jts.geom.GeometryFactory;
 import com.vividsolutions.jts.geom.Point;
 import com.vividsolutions.jts.geom.PrecisionModel;
-import de.komoot.photon.elasticsearch.PhotonIndex;
-import de.komoot.photon.elasticsearch.Server;
+import de.komoot.photon.elasticsearch.ElasticTestServer;
+import de.komoot.photon.searcher.PhotonResult;
 import lombok.extern.slf4j.Slf4j;
-import org.elasticsearch.action.admin.indices.refresh.RefreshRequest;
-import org.elasticsearch.action.get.GetResponse;
-import org.elasticsearch.client.Client;
-import org.junit.After;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.io.TempDir;
 
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.util.Collections;
 
 /**
  * Start an ES server with some test data that then can be queried in tests that extend this class
@@ -23,49 +21,74 @@ import java.io.IOException;
  */
 @Slf4j
 public class ESBaseTester {
-    public static final String TEST_CLUSTER_NAME = "photon-test";
-    private static GeometryFactory FACTORY = new GeometryFactory(new PrecisionModel(), 4326);
+    @TempDir
+    protected Path dataDirectory;
 
-    private Server server;
+    public static final String TEST_CLUSTER_NAME = "photon-test";
+    protected static GeometryFactory FACTORY = new GeometryFactory(new PrecisionModel(), 4326);
+
+    private ElasticTestServer server;
 
     protected PhotonDoc createDoc(double lon, double lat, int id, int osmId, String key, String value) {
-        ImmutableMap<String, String> nameMap = ImmutableMap.of("name", "berlin");
         Point location = FACTORY.createPoint(new Coordinate(lon, lat));
-        return new PhotonDoc(id, "W", osmId, key, value).names(nameMap).centroid(location);
+        return new PhotonDoc(id, "W", osmId, key, value).names(Collections.singletonMap("name", "berlin")).centroid(location);
     }
 
-    protected GetResponse getById(int id) {
-        return getClient().prepareGet(PhotonIndex.NAME,PhotonIndex.TYPE, String.valueOf(id)).execute().actionGet();
+    protected PhotonResult getById(int id) {
+        return server.getById(id);
     }
 
 
-    @After
+    @AfterEach
     public void tearDown() {
         shutdownES();
     }
 
+    public void setUpES() throws IOException {
+        setUpES(dataDirectory, "en");
+    }
     /**
      * Setup the ES server
      *
      * @throws IOException
      */
-    public void setUpES() throws IOException {
-        server = new Server(TEST_CLUSTER_NAME, new File("./target/es_photon_test").getAbsolutePath(), "en", "").setMaxShards(1).start();
-        deleteIndex(); // just in case of an abnormal abort previously
-        server.recreateIndex();
+    public void setUpES(Path test_directory, String... languages) throws IOException {
+        server = new ElasticTestServer(test_directory.toString());
+        server.start(TEST_CLUSTER_NAME, new String[]{});
+        server.recreateIndex(languages);
         refresh();
     }
 
-    protected Client getClient() {
+    protected Importer makeImporter() {
+        return server.createImporter(new String[]{"en"}, new String[]{});
+    }
+
+    protected Importer makeImporterWithExtra(String... extraTags) {
+        return server.createImporter(new String[]{"en"}, extraTags);
+    }
+
+    protected Importer makeImporterWithLanguages(String... languages) {
+        return server.createImporter(languages, new String[]{});
+    }
+
+    protected Updater makeUpdater() {
+        return server.createUpdater(new String[]{"en"}, new String[]{});
+    }
+
+    protected Updater makeUpdaterWithExtra(String... extraTags) {
+        return server.createUpdater(new String[]{"en"}, extraTags);
+    }
+
+    protected ElasticTestServer getServer() {
         if (server == null) {
             throw new RuntimeException("call setUpES before using getClient");
         }
 
-        return server.getClient();
+        return server;
     }
 
     protected void refresh() {
-        getClient().admin().indices().refresh(new RefreshRequest(PhotonIndex.NAME)).actionGet();
+        server.refresh();
     }
 
     /**
@@ -74,10 +97,5 @@ public class ESBaseTester {
     public void shutdownES() {
         if (server != null)
             server.shutdown();
-    }
-
-    public void deleteIndex() {
-        if (server != null)
-            server.deleteIndex();
     }
 }

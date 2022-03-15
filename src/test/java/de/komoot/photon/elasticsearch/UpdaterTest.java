@@ -1,26 +1,20 @@
 package de.komoot.photon.elasticsearch;
 
 import de.komoot.photon.ESBaseTester;
+import de.komoot.photon.Importer;
 import de.komoot.photon.PhotonDoc;
-import org.elasticsearch.action.get.GetResponse;
-import org.junit.After;
-import org.junit.Test;
+import de.komoot.photon.Updater;
+import de.komoot.photon.searcher.PhotonResult;
+import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 public class UpdaterTest extends ESBaseTester {
-
-    @After
-    public void tearDown() {
-        deleteIndex();
-        shutdownES();
-    }
-
 
     @Test
     public void addNameToDoc() throws IOException {
@@ -29,21 +23,21 @@ public class UpdaterTest extends ESBaseTester {
         PhotonDoc doc = new PhotonDoc(1234, "N", 1000, "place", "city").names(names);
 
         setUpES();
-        Importer instance = new Importer(getClient(), "en", "");
+        Importer instance = makeImporter();
         instance.add(doc);
         instance.finish();
         refresh();
 
         names.put("name:en", "Enfoo");
-        Updater updater = new Updater(getClient(), "en,de", "");
+        Updater updater = makeUpdater();
         updater.create(doc);
         updater.finish();
         refresh();
 
-        GetResponse response = getById(1234);
+        PhotonResult response = getById(1234);
+        assertNotNull(response);
 
-        assertTrue(response.isExists());
-        Map<String, String> out_names = (Map<String, String>) response.getSourceAsMap().get("name");
+        Map<String, String> out_names = response.getMap("name");
         assertEquals("Foo", out_names.get("default"));
         assertEquals("Enfoo", out_names.get("en"));
     }
@@ -56,21 +50,21 @@ public class UpdaterTest extends ESBaseTester {
         PhotonDoc doc = new PhotonDoc(1234, "N", 1000, "place", "city").names(names);
 
         setUpES();
-        Importer instance = new Importer(getClient(), "en", "");
+        Importer instance = makeImporter();
         instance.add(doc);
         instance.finish();
         refresh();
 
         names.remove("name");
-        Updater updater = new Updater(getClient(), "en,de", "");
+        Updater updater = makeUpdater();
         updater.create(doc);
         updater.finish();
         refresh();
 
-        GetResponse response = getById(1234);
+        PhotonResult response = getById(1234);
+        assertNotNull(response);
 
-        assertTrue(response.isExists());
-        Map<String, String> out_names = (Map<String, String>) response.getSourceAsMap().get("name");
+        Map<String, String> out_names = response.getMap("name");
         assertFalse(out_names.containsKey("default"));
         assertEquals("Enfoo", out_names.get("en"));
     }
@@ -82,26 +76,26 @@ public class UpdaterTest extends ESBaseTester {
         PhotonDoc doc = new PhotonDoc(1234, "N", 1000, "place", "city").names(names);
 
         setUpES();
-        Importer instance = new Importer(getClient(), "en", "website");
+        Importer instance = makeImporterWithExtra("website");
         instance.add(doc);
         instance.finish();
         refresh();
 
-        GetResponse response = getById(1234);
-        assertTrue(response.isExists());
+        PhotonResult response = getById(1234);
+        assertNotNull(response);
 
-        assertNull(response.getSource().get("extra"));
+        assertNull(response.get("extra"));
 
         doc.extraTags(Collections.singletonMap("website", "http://site.foo"));
-        Updater updater = new Updater(getClient(), "en,de", "website");
+        Updater updater = makeUpdaterWithExtra("website");
         updater.create(doc);
         updater.finish();
         refresh();
 
         response = getById(1234);
-        assertTrue(response.isExists());
+        assertNotNull(response);
 
-        Map<String, String> extra = (Map<String, String>) response.getSource().get("extra");
+        Map<String, String> extra = response.getMap("extra");
 
         assertNotNull(extra);
         assertEquals(Collections.singletonMap("website", "http://site.foo"), extra);

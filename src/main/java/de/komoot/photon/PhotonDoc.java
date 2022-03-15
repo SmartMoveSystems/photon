@@ -1,7 +1,5 @@
 package de.komoot.photon;
 
-import com.google.common.collect.ImmutableMap;
-import com.neovisionaries.i18n.CountryCode;
 import com.vividsolutions.jts.geom.Envelope;
 import com.vividsolutions.jts.geom.Geometry;
 import com.vividsolutions.jts.geom.Point;
@@ -31,7 +29,7 @@ public class PhotonDoc {
     private Envelope bbox = null;
     private long parentPlaceId = 0; // 0 if unset
     private double importance = 0;
-    private CountryCode countryCode = null;
+    private String countryCode = null;
     private long linkedPlaceId = 0; // 0 if unset
     private int rankAddress = 30;
 
@@ -92,7 +90,9 @@ public class PhotonDoc {
     }
 
     public PhotonDoc countryCode(String countryCode) {
-        this.countryCode = CountryCode.getByCode(countryCode, false);
+        if (countryCode != null) {
+            this.countryCode = countryCode.toUpperCase();
+        }
         return this;
     }
 
@@ -203,7 +203,7 @@ public class PhotonDoc {
                 }
                 // we keep the former name in the context as it might be helpful when looking up typos
                 if (!Objects.isNull(existingName)) {
-                    context.add(ImmutableMap.of("formerName", existingName));
+                    context.add(Collections.singletonMap("formerName", existingName));
                 }
                 map.put("name", field);
             }

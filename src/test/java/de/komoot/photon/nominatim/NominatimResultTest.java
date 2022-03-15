@@ -3,11 +3,11 @@ package de.komoot.photon.nominatim;
 import com.vividsolutions.jts.io.ParseException;
 import com.vividsolutions.jts.io.WKTReader;
 import de.komoot.photon.PhotonDoc;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.util.*;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 public class NominatimResultTest {
     private final PhotonDoc simpleDoc = new PhotonDoc(10000, "N", 123, "place", "house")
@@ -33,6 +33,11 @@ public class NominatimResultTest {
         Collections.sort(housenumbers);
 
         assertEquals(housenumbers, outnumbers);
+    }
+
+    private void assertNoHousenumber(List<PhotonDoc> docs) {
+        assertEquals(1, docs.size());
+        assertNull(docs.get(0).getHouseNumber());
     }
 
     private void assertSimpleOnly(List<PhotonDoc> docs) {
@@ -69,6 +74,30 @@ public class NominatimResultTest {
 
         res.addHousenumbersFromString("4;");
         assertDocWithHousenumbers(Arrays.asList("34", "50b", "4"), res.getDocsWithHousenumber());
+    }
+
+    @Test
+    public void testLongHousenumber() {
+        NominatimResult res = new NominatimResult(simpleDoc);
+
+        res.addHousenumbersFromString("987987誰も住んでいないスーパーマーケット誰も住んでいないスーパーマーケット誰も住んでいないスーパーマーケット誰も住んでいないスーパーマーケット誰も住んでいないスーパーマーケット誰も住んでいないスーパーマーケット誰も住んでいないスーパーマーケット誰も住んでいないスーパーマーケット誰も住んでいないスーパーマー");
+        assertNoHousenumber(res.getDocsWithHousenumber());
+    }
+
+    @Test
+    public void testHousenumberWithNoNumber() {
+        NominatimResult res = new NominatimResult(simpleDoc);
+
+        res.addHousenumbersFromString("something bad");
+        assertNoHousenumber(res.getDocsWithHousenumber());
+    }
+
+    @Test
+    public void testHousenumberWithNoNumberInPart() {
+        NominatimResult res = new NominatimResult(simpleDoc);
+
+        res.addHousenumbersFromString("14, portsmith");
+        assertNoHousenumber(res.getDocsWithHousenumber());
     }
 
     @Test

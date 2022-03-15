@@ -1,14 +1,19 @@
 package de.komoot.photon.elasticsearch;
 
-import de.komoot.photon.CommandLineArgs;
+import de.komoot.photon.DatabaseProperties;
+import de.komoot.photon.Importer;
+import de.komoot.photon.Updater;
+import de.komoot.photon.searcher.ReverseHandler;
+import de.komoot.photon.searcher.SearchHandler;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.SystemUtils;
+import org.elasticsearch.action.get.GetResponse;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.transport.TransportClient;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.transport.InetSocketTransportAddress;
-import org.elasticsearch.common.xcontent.XContentType;
+import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.index.IndexNotFoundException;
 import org.elasticsearch.node.InternalSettingsPreparer;
 import org.elasticsearch.node.Node;
@@ -16,22 +21,14 @@ import org.elasticsearch.node.NodeValidationException;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.transport.Netty4Plugin;
 import org.elasticsearch.transport.client.PreBuiltTransportClient;
-import org.json.JSONArray;
-import org.json.JSONObject;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.URISyntaxException;
 import java.net.URL;
-import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.*;
 
 /**
  * Helper class to start/stop elasticsearch node and get elasticsearch clients
@@ -40,20 +37,27 @@ import java.util.List;
  */
 @Slf4j
 public class Server {
+    /**
+     * Database version created by new imports with the current code.
+     *
+     * Format must be: major.minor.patch-dev
+     *
+     * Increase to next to be released version when the database layout
+     * changes in an incompatible way. If it is alredy at the next released
+     * version, increase the dev version.
+     */
+    private static final String DATABASE_VERSION = "0.3.6-0";
+    public static final String PROPERTY_DOCUMENT_ID = "DATABASE_PROPERTIES";
+
+    private static final String BASE_FIELD = "document_properties";
+    private static final String FIELD_VERSION = "database_version";
+    private static final String FIELD_LANGUAGES = "indexed_languages";
+
     private Node esNode;
 
-    private Client esClient;
-
-    private String clusterName;
+    protected Client esClient;
 
     private File esDirectory;
-
-    private final String[] languages;
-    private String[] extraTags = new String[0];
-
-    private String transportAddresses;
-
-    private Integer shards = null;
 
     protected static class MyNode extends Node {
         public MyNode(Settings preparedSettings, Collection<Class<? extends Plugin>> classpathPlugins) {
@@ -61,14 +65,7 @@ public class Server {
         }
     }
 
-    public Server(CommandLineArgs args) {
-        this(args.getCluster(), args.getDataDirectory(), args.getLanguages(), args.getTransportAddresses());
-        if (args.getExtraTags().length() > 0) {
-            this.extraTags = args.getExtraTags().split(",");
-        }
-    }
-
-    public Server(String clusterName, String mainDirectory, String languages, String transportAddresses) {
+    public Server(String mainDirectory) {
         try {
             if (SystemUtils.IS_OS_WINDOWS) {
                 setupDirectories(new URL("file:///" + mainDirectory));
@@ -78,21 +75,17 @@ public class Server {
         } catch (Exception e) {
             throw new RuntimeException("Can't create directories: " + mainDirectory, e);
         }
-        this.clusterName = clusterName;
-        this.languages = languages.split(",");
-        this.transportAddresses = transportAddresses;
     }
 
-    public Server start() {
+    public Server start(String clusterName, String[] transportAddresses) {
         Settings.Builder sBuilder = Settings.builder();
         sBuilder.put("path.home", this.esDirectory.toString());
         sBuilder.put("network.host", "127.0.0.1"); // http://stackoverflow.com/a/15509589/1245622
         sBuilder.put("cluster.name", clusterName);
 
-        if (transportAddresses != null && !transportAddresses.isEmpty()) {
+        if (transportAddresses.length > 0) {
             TransportClient trClient = new PreBuiltTransportClient(sBuilder.build());
-            List<String> addresses = Arrays.asList(transportAddresses.split(","));
-            for (String tAddr : addresses) {
+            for (String tAddr : transportAddresses) {
                 int index = tAddr.indexOf(":");
                 if (index >= 0) {
                     int port = Integer.parseInt(tAddr.substring(index + 1));
@@ -105,7 +98,7 @@ public class Server {
 
             esClient = trClient;
 
-            log.info("started elastic search client connected to " + addresses);
+            log.info("Started elastic search client connected to " + transportAddresses);
 
         } else {
 
@@ -129,6 +122,10 @@ public class Server {
         return this;
     }
 
+    public void waitForReady() {
+        esClient.admin().cluster().prepareHealth().setWaitForYellowStatus().get();
+    }
+
     /**
      * stops the elasticsearch node
      */
@@ -143,12 +140,6 @@ public class Server {
         }
     }
 
-    /**
-     * returns an elasticsearch client
-     */
-    public Client getClient() {
-        return esClient;
-    }
 
     private void setupDirectories(URL directoryName) throws IOException, URISyntaxException {
         final File mainDirectory = new File(directoryName.toURI());
@@ -181,113 +172,112 @@ public class Server {
 
     }
 
-    public void recreateIndex() throws IOException {
+    public DatabaseProperties recreateIndex(String[] languages) throws IOException {
         deleteIndex();
 
-        final Client client = this.getClient();
-        final InputStream mappings = Thread.currentThread().getContextClassLoader()
-                .getResourceAsStream("mappings.json");
-        final InputStream indexSettings = Thread.currentThread().getContextClassLoader()
-                .getResourceAsStream("index_settings.json");
-        final Charset utf8Charset = Charset.forName("utf-8");
+        loadIndexSettings().createIndex(esClient, PhotonIndex.NAME);
 
-        String mappingsString = IOUtils.toString(mappings, utf8Charset);
-        JSONObject mappingsJSON = new JSONObject(mappingsString);
+        new IndexMapping().addLanguages(languages).putMapping(esClient, PhotonIndex.NAME, PhotonIndex.TYPE);
 
-        // add all langs to the mapping
-        mappingsJSON = addLangsToMapping(mappingsJSON);
+        DatabaseProperties dbProperties = new DatabaseProperties().setLanguages(languages);
+        saveToDatabase(dbProperties);
 
-        JSONObject settings = new JSONObject(IOUtils.toString(indexSettings, utf8Charset));
-        if (shards != null) {
-            settings.put("index", new JSONObject("{ \"number_of_shards\":" + shards + " }"));
-        }
-        client.admin().indices().prepareCreate(PhotonIndex.NAME).setSettings(settings.toString(), XContentType.JSON).execute().actionGet();
-
-        client.admin().indices().preparePutMapping(PhotonIndex.NAME).setType(PhotonIndex.TYPE).setSource(mappingsJSON.toString(), XContentType.JSON).execute().actionGet();
-        log.info("mapping created: " + mappingsJSON.toString());
+        return dbProperties;
     }
 
-    public void deleteIndex() {
+    public void updateIndexSettings(String synonymFile) throws IOException {
+        // Load the settings from the database to make sure it is at the right
+        // version. If the version is wrong, we should not be messing with the
+        // index.
+        DatabaseProperties dbProperties = new DatabaseProperties();
+        loadFromDatabase(dbProperties);
+
+        loadIndexSettings().setSynonymFile(synonymFile).updateIndex(esClient, PhotonIndex.NAME);
+
+        // Sanity check: legacy databases don't save the languages, so there is no way to update
+        //               the mappings consistently.
+        if (dbProperties.getLanguages() != null) {
+            new IndexMapping()
+                    .addLanguages(dbProperties.getLanguages())
+                    .putMapping(esClient, PhotonIndex.NAME, PhotonIndex.TYPE);
+        }
+    }
+
+    protected IndexSettings loadIndexSettings() {
+        return new IndexSettings();
+    }
+
+    private void deleteIndex() {
         try {
-            this.getClient().admin().indices().prepareDelete(PhotonIndex.NAME).execute().actionGet();
+            esClient.admin().indices().prepareDelete(PhotonIndex.NAME).execute().actionGet();
         } catch (IndexNotFoundException e) {
             // ignore
         }
     }
 
-    private JSONObject addLangsToMapping(JSONObject mappingsObject) {
-        // define collector json strings
-        String copyToCollectorString = "{\"type\":\"text\",\"index\":false,\"copy_to\":[\"collector.{lang}\"]}";
-        String nameToCollectorString = "{\"type\":\"text\",\"index\":false,\"fields\":{\"ngrams\":{\"type\":\"text\",\"analyzer\":\"index_ngram\"},\"raw\":{\"type\":\"text\",\"analyzer\":\"index_raw\"}},\"copy_to\":[\"collector.{lang}\"]}";
-        String collectorString = "{\"type\":\"text\",\"index\":false,\"fields\":{\"ngrams\":{\"type\":\"text\",\"analyzer\":\"index_ngram\"},\"raw\":{\"type\":\"text\",\"analyzer\":\"index_raw\"}},\"copy_to\":[\"collector.{lang}\"]}}},\"street\":{\"type\":\"object\",\"properties\":{\"default\":{\"text\":false,\"type\":\"text\",\"copy_to\":[\"collector.default\"]}";
 
-        JSONObject placeObject = mappingsObject.optJSONObject("place");
-        JSONObject propertiesObject = placeObject == null ? null : placeObject.optJSONObject("properties");
+   /**
+     * Save the global properties to the database.
+     *
+     * The function saved properties available as members and the database version
+     * as currently defined in DATABASE_VERSION.
+     */
+    public void saveToDatabase(DatabaseProperties dbProperties) throws IOException  {
+        final XContentBuilder builder = XContentFactory.jsonBuilder().startObject().startObject(BASE_FIELD)
+                        .field(FIELD_VERSION, DATABASE_VERSION)
+                        .field(FIELD_LANGUAGES, String.join(",", dbProperties.getLanguages()))
+                        .endObject().endObject();
 
-        if (propertiesObject != null) {
-            for (String lang : languages) {
-                // create lang-specific json objects
-                JSONObject copyToCollectorObject = new JSONObject(copyToCollectorString.replace("{lang}", lang));
-                JSONObject nameToCollectorObject = new JSONObject(nameToCollectorString.replace("{lang}", lang));
-                JSONObject collectorObject = new JSONObject(collectorString.replace("{lang}", lang));
-
-                // add language specific tags to the collector
-                propertiesObject = addToCollector("city", propertiesObject, copyToCollectorObject, lang);
-                propertiesObject = addToCollector("context", propertiesObject, copyToCollectorObject, lang);
-                propertiesObject = addToCollector("country", propertiesObject, copyToCollectorObject, lang);
-                propertiesObject = addToCollector("state", propertiesObject, copyToCollectorObject, lang);
-                propertiesObject = addToCollector("street", propertiesObject, copyToCollectorObject, lang);
-                propertiesObject = addToCollector("district", propertiesObject, copyToCollectorObject, lang);
-                propertiesObject = addToCollector("locality", propertiesObject, copyToCollectorObject, lang);
-                propertiesObject = addToCollector("name", propertiesObject, nameToCollectorObject, lang);
-
-                // add language specific collector to default for name
-                JSONObject name = propertiesObject.optJSONObject("name");
-                JSONObject nameProperties = name == null ? null : name.optJSONObject("properties");
-                if (nameProperties != null) {
-                    JSONObject defaultObject = nameProperties.optJSONObject("default");
-                    JSONArray copyToArray = defaultObject.optJSONArray("copy_to");
-                    copyToArray.put("name." + lang);
-
-                    defaultObject.put("copy_to", copyToArray);
-                    nameProperties.put("default", defaultObject);
-                    name.put("properties", nameProperties);
-                    propertiesObject.put("name", name);
-                }
-
-                // add language specific collector
-                propertiesObject = addToCollector("collector", propertiesObject, collectorObject, lang);
-            }
-            placeObject.put("properties", propertiesObject);
-            return mappingsObject.put("place", placeObject);
-        }
-
-        log.error("cannot add languages to mapping.json, please double-check the mappings.json or the language values supplied");
-        return null;
-    }
-
-    private JSONObject addToCollector(String key, JSONObject properties, JSONObject collectorObject, String lang) {
-        JSONObject keyObject = properties.optJSONObject(key);
-        JSONObject keyProperties = keyObject == null ? null : keyObject.optJSONObject("properties");
-        if (keyProperties != null) {
-            if (!keyProperties.has(lang)) {
-                keyProperties.put(lang, collectorObject);
-            }
-            keyObject.put("properties", keyProperties);
-            return properties.put(key, keyObject);
-        }
-        return properties;
+        esClient.prepareIndex(PhotonIndex.NAME, PhotonIndex.TYPE).
+                    setSource(builder).setId(PROPERTY_DOCUMENT_ID).execute().actionGet();
     }
 
     /**
-     * Set the maximum number of shards for the embedded node
-     * This typically only makes sense for testing
+     * Load the global properties from the database.
      *
-     * @param shards the maximum number of shards
-     * @return this Server instance for chaining
+     * The function first loads the database version and throws an exception if it does not correspond
+     * to the version as defined in DATABASE_VERSION.
+     *
+     * Currently does nothing when the property entry is missing. Later versions with a higher
+     * database version will then fail.
      */
-    public Server setMaxShards(int shards) {
-        this.shards = shards;
-        return this;
+    public void loadFromDatabase(DatabaseProperties dbProperties) {
+        GetResponse response = esClient.prepareGet(PhotonIndex.NAME, PhotonIndex.TYPE, PROPERTY_DOCUMENT_ID).execute().actionGet();
+
+        // We are currently at the database version where versioning was introduced.
+        if (!response.isExists()) {
+            return;
+        }
+
+        Map<String, String> properties = (Map<String, String>) response.getSource().get(BASE_FIELD);
+
+        if (properties == null) {
+            throw new RuntimeException("Found database properties but no '" + BASE_FIELD +"' field. Database corrupt?");
+        }
+
+        String version = properties.getOrDefault(FIELD_VERSION, "");
+        if (!DATABASE_VERSION.equals(version)) {
+            log.error("Database has incompatible version '" + version + "'. Expected: " + DATABASE_VERSION);
+            throw new RuntimeException("Incompatible database.");
+        }
+
+        String langString = properties.get(FIELD_LANGUAGES);
+        dbProperties.setLanguages(langString == null ? null : langString.split(","));
+    }
+
+    public Importer createImporter(String[] languages, String[] extraTags) {
+        return new de.komoot.photon.elasticsearch.Importer(esClient, languages, extraTags);
+    }
+
+    public Updater createUpdater(String[] languages, String[] extraTags) {
+        return new de.komoot.photon.elasticsearch.Updater(esClient, languages, extraTags);
+    }
+
+    public SearchHandler createSearchHandler(String[] languages) {
+        return new ElasticsearchSearchHandler(esClient, languages);
+    }
+
+    public ReverseHandler createReverseHandler() {
+        return new ElasticsearchReverseHandler(esClient);
     }
 }
