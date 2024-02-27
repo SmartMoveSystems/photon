@@ -1,25 +1,30 @@
 package de.komoot.photon.query;
 
-import de.komoot.photon.ESBaseTester;
-import de.komoot.photon.Importer;
-import de.komoot.photon.PhotonDoc;
-import de.komoot.photon.searcher.PhotonResult;
-import de.komoot.photon.searcher.TagFilter;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.*;
+import java.util.stream.Stream;
+
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
-import java.nio.file.Path;
-import java.util.List;
-import java.util.stream.Stream;
-
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.params.provider.Arguments.arguments;
+import  static org.junit.jupiter.params.provider.Arguments.arguments;
+
+import com.vividsolutions.jts.geom.Coordinate;
+import com.vividsolutions.jts.geom.Point;
+
+import de.komoot.photon.ESBaseTester;
+import de.komoot.photon.Importer;
+import de.komoot.photon.PhotonDoc;
+import de.komoot.photon.searcher.PhotonResult;
+import de.komoot.photon.searcher.TagFilter;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-public class QueryFilterTagValueTest extends ESBaseTester {
+public class QueryReverseFilterTagValueTest extends ESBaseTester {
     @TempDir
     private static Path instanceTestDirectory;
 
@@ -34,7 +39,7 @@ public class QueryFilterTagValueTest extends ESBaseTester {
                                                       "railway", "station"};
 
     @BeforeAll
-    public void setUp() throws Exception {
+    public void setup() throws IOException {
         setUpES(instanceTestDirectory, "en", "de", "fr");
         Importer instance = makeImporter();
         double lon = 13.38886;
@@ -45,11 +50,11 @@ public class QueryFilterTagValueTest extends ESBaseTester {
             PhotonDoc doc = this.createDoc(lon, lat, i, i, key, value);
             instance.add(doc, 0);
             lon += 0.00004;
-            lat += 0.00086;
+            lat += 0.00006;
             doc = this.createDoc(lon, lat, i + 1, i + 1, key, value);
             instance.add(doc, 0);
             lon += 0.00004;
-            lat += 0.00086;
+            lat += 0.00006;
         }
         instance.finish();
         refresh();
@@ -61,20 +66,19 @@ public class QueryFilterTagValueTest extends ESBaseTester {
         super.tearDown();
     }
 
-    private List<PhotonResult> searchWithTags(String[] params) {
-        PhotonRequest request = new PhotonRequest("berlin", "en").setLimit(50);
+    private List<PhotonResult> reverseWithTags(String[] params) {
+        Point pt = FACTORY.createPoint(new Coordinate(13.38886, 52.51704));
+        ReverseRequest request = new ReverseRequest(pt, "en", 1.0, "", 50, true, new HashSet<>(), false);
         for (String param : params) {
             request.addOsmTagFilter(TagFilter.buildOsmTagFilter(param));
         }
-
-        return getServer().createSearchHandler(new String[]{"en"}, 1).search(request);
+        return getServer().createReverseHandler(1).reverse(request);
     }
-
 
     @ParameterizedTest
     @MethodSource("simpleTagFilterProvider")
     public void testSingleTagFilter(String filter, int expectedResults) {
-        assertEquals(expectedResults, searchWithTags(new String[]{filter}).size());
+        assertEquals(expectedResults, reverseWithTags(new String[]{filter}).size());
     }
 
     static Stream<Arguments> simpleTagFilterProvider() {
@@ -90,11 +94,10 @@ public class QueryFilterTagValueTest extends ESBaseTester {
         );
     }
 
-
     @ParameterizedTest
     @MethodSource("combinedTagFilterProvider")
     public void testCombinedTagFilter(String[] filters, int expectedResults) {
-        assertEquals(expectedResults, searchWithTags(filters).size());
+        assertEquals(expectedResults, reverseWithTags(filters).size());
     }
 
     static Stream<Arguments> combinedTagFilterProvider() {

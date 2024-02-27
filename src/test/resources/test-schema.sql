@@ -42,10 +42,10 @@ CREATE TABLE location_property_osmline (
     indexed_date TIMESTAMP,
     startnumber INTEGER,
     endnumber INTEGER,
+    step SMALLINT,
     partition SMALLINT,
     indexed_status SMALLINT,
     linegeo GEOMETRY,
-    interpolationtype TEXT,
     address JSON,
     postcode TEXT,
     country_code VARCHAR(2)
@@ -63,3 +63,11 @@ CREATE TABLE country_name (
 
 INSERT INTO country_name
     VALUES ('de', JSON '{"name" : "Deutschland", "name:en" : "Germany"}', 'de', 2);
+
+
+CREATE TABLE photon_updates (
+    rel TEXT,
+    place_id BIGINT,
+    operation TEXT,
+    indexed_date TIMESTAMP
+);

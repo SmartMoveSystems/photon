@@ -43,10 +43,10 @@ public class Server {
      * Format must be: major.minor.patch-dev
      *
      * Increase to next to be released version when the database layout
-     * changes in an incompatible way. If it is alredy at the next released
+     * changes in an incompatible way. If it is already at the next released
      * version, increase the dev version.
      */
-    private static final String DATABASE_VERSION = "0.3.6-0";
+    private static final String DATABASE_VERSION = "0.3.6-1";
     public static final String PROPERTY_DOCUMENT_ID = "DATABASE_PROPERTIES";
 
     private static final String BASE_FIELD = "document_properties";
@@ -98,7 +98,7 @@ public class Server {
 
             esClient = trClient;
 
-            log.info("Started elastic search client connected to " + transportAddresses);
+            log.info("Started elastic search client connected to " + String.join(", ", transportAddresses));
 
         } else {
 
@@ -273,11 +273,11 @@ public class Server {
         return new de.komoot.photon.elasticsearch.Updater(esClient, languages, extraTags);
     }
 
-    public SearchHandler createSearchHandler(String[] languages) {
-        return new ElasticsearchSearchHandler(esClient, languages);
+    public SearchHandler createSearchHandler(String[] languages, int queryTimeoutSec) {
+        return new ElasticsearchSearchHandler(esClient, languages, queryTimeoutSec);
     }
 
-    public ReverseHandler createReverseHandler() {
-        return new ElasticsearchReverseHandler(esClient);
+    public ReverseHandler createReverseHandler(int queryTimeoutSec) {
+        return new ElasticsearchReverseHandler(esClient, queryTimeoutSec);
     }
 }

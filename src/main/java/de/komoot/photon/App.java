@@ -5,6 +5,8 @@ import com.beust.jcommander.ParameterException;
 import de.komoot.photon.elasticsearch.Server;
 import de.komoot.photon.nominatim.NominatimConnector;
 import de.komoot.photon.nominatim.NominatimUpdater;
+import de.komoot.photon.searcher.ReverseHandler;
+import de.komoot.photon.searcher.SearchHandler;
 import de.komoot.photon.utils.CorsFilter;
 import lombok.extern.slf4j.Slf4j;
 import spark.Request;
@@ -24,6 +26,11 @@ public class App {
 
         if (args.getJsonDump() != null) {
             startJsonDump(args);
+            return;
+        }
+
+        if (args.getNominatimUpdateInit() != null) {
+            startNominatimUpdateInit(args);
             return;
         }
 
@@ -124,9 +131,15 @@ public class App {
         log.info("imported data from nominatim to photon with languages: " + String.join(",", dbProperties.getLanguages()));
     }
 
-    /**
-     * Prepare Nominatim updater.
-     */
+    private static void startNominatimUpdateInit(CommandLineArgs args) {
+        NominatimUpdater nominatimUpdater = new NominatimUpdater(args.getHost(), args.getPort(), args.getDatabase(), args.getUser(), args.getPassword());
+        nominatimUpdater.initUpdates(args.getNominatimUpdateInit());
+    }
+
+
+        /**
+         * Prepare Nominatim updater.
+         */
     private static NominatimUpdater setupNominatimUpdater(CommandLineArgs args, Server server) {
         // Get database properties and ensure that the version is compatible.
         DatabaseProperties dbProperties = new DatabaseProperties();
@@ -144,7 +157,7 @@ public class App {
         // Get database properties and ensure that the version is compatible.
         DatabaseProperties dbProperties = new DatabaseProperties();
         server.loadFromDatabase(dbProperties);
-        if (args.getLanguages().length > 0) {
+        if (args.getLanguages(false).length > 0) {
             dbProperties.restrictLanguages(args.getLanguages());
         }
 
@@ -162,13 +175,17 @@ public class App {
 
         // setup search API
         String[] langs = dbProperties.getLanguages();
+        SearchHandler searchHandler = server.createSearchHandler(langs, args.getQueryTimeout());
+        get("api", new SearchRequestHandler("api", searchHandler, langs, args.getDefaultLanguage()));
+        get("api/", new SearchRequestHandler("api/", searchHandler, langs, args.getDefaultLanguage()));
+
+        ReverseHandler reverseHandler = server.createReverseHandler(args.getQueryTimeout());
+        get("reverse", new ReverseSearchRequestHandler("reverse", reverseHandler, dbProperties.getLanguages(), args.getDefaultLanguage()));
+        get("reverse/", new ReverseSearchRequestHandler("reverse/", reverseHandler, dbProperties.getLanguages(), args.getDefaultLanguage()));
+
         get("add", new AddHandler("api", server, langs, args.getDefaultLanguage()));
         get("add/", new AddHandler("api/", server, langs, args.getDefaultLanguage()));
-        get("api", new SearchRequestHandler("api", server.createSearchHandler(langs), langs, args.getDefaultLanguage()));
-        get("api/", new SearchRequestHandler("api/", server.createSearchHandler(langs), langs, args.getDefaultLanguage()));
-        get("reverse", new ReverseSearchRequestHandler("reverse", server.createReverseHandler(), dbProperties.getLanguages(), args.getDefaultLanguage()));
-        get("reverse/", new ReverseSearchRequestHandler("reverse/", server.createReverseHandler(), dbProperties.getLanguages(), args.getDefaultLanguage()));
-
+        
         if (args.isEnableUpdateApi()) {
             // setup update API
             final NominatimUpdater nominatimUpdater = setupNominatimUpdater(args, server);

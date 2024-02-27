@@ -1,5 +1,9 @@
 package de.komoot.photon.nominatim.model;
 
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
 /**
  * List of address ranks available to Photon.
  * <p>
@@ -9,11 +13,11 @@ package de.komoot.photon.nominatim.model;
 public enum AddressType {
     HOUSE("house", 29, 30),
     STREET("street", 26, 28),
-    LOCALITY("locality", 22, 26),
-    DISTRICT("district", 17, 22),
-    CITY("city", 13, 17),
-    COUNTY("county", 10, 13),
-    STATE("state", 5, 10),
+    LOCALITY("locality", 22, 25),
+    DISTRICT("district", 17, 21),
+    CITY("city", 13, 16),
+    COUNTY("county", 10, 12),
+    STATE("state", 5, 9),
     COUNTRY("country", 4, 4);
 
     private final String name;
@@ -54,5 +58,9 @@ public enum AddressType {
 
     public String getName() {
         return name;
+    }
+
+    public static List<String> getNames() {
+        return Arrays.stream(AddressType.values()).map(AddressType::getName).collect(Collectors.toList());
     }
 }

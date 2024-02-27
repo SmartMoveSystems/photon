@@ -4,7 +4,6 @@ package de.komoot.photon.elasticsearch;
 import com.vividsolutions.jts.geom.Envelope;
 import com.vividsolutions.jts.geom.Point;
 import de.komoot.photon.searcher.TagFilter;
-import de.komoot.photon.searcher.TagFilterKind;
 import org.elasticsearch.common.lucene.search.function.CombineFunction;
 import org.elasticsearch.common.lucene.search.function.FiltersFunctionScoreQuery.ScoreMode;
 import org.elasticsearch.common.unit.Fuzziness;
@@ -39,11 +38,11 @@ public class PhotonQueryBuilder {
 
     private State state;
 
-    private BoolQueryBuilder orQueryBuilderForIncludeTagFiltering = null;
-
-    private BoolQueryBuilder andQueryBuilderForExcludeTagFiltering = null;
+    private OsmTagFilter osmTagFilter;
 
     private GeoBoundingBoxQueryBuilder bboxQueryBuilder;
+
+    private TermsQueryBuilder layerQueryBuilder;
 
     private BoolQueryBuilder finalQueryBuilder;
 
@@ -54,32 +53,21 @@ public class PhotonQueryBuilder {
         BoolQueryBuilder query4QueryBuilder = QueryBuilders.boolQuery();
 
         // 1. All terms of the quey must be contained in the place record somehow. Be more lenient on second try.
-        QueryBuilder collectorQuery;
-        if (lenient) {
-            collectorQuery = QueryBuilders.boolQuery()
-                    .should(QueryBuilders.matchQuery("collector.default", query)
-                            .fuzziness(Fuzziness.ONE)
-                            .prefixLength(2)
-                            .analyzer("search_ngram")
-                            .minimumShouldMatch("-1"))
-                    .should(QueryBuilders.matchQuery(String.format("collector.%s.ngrams", language), query)
-                            .fuzziness(Fuzziness.ONE)
-                            .prefixLength(2)
-                            .analyzer("search_ngram")
-                            .minimumShouldMatch("-1"))
-                    .minimumShouldMatch("1");
-        } else {
-            MultiMatchQueryBuilder builder =
-                    QueryBuilders.multiMatchQuery(query).field("collector.default", 1.0f).type(MultiMatchQueryBuilder.Type.CROSS_FIELDS).prefixLength(2).analyzer("search_ngram").minimumShouldMatch("100%");
+        MultiMatchQueryBuilder builder =
+                QueryBuilders.multiMatchQuery(query)
+                        .field("collector.default", 1.0f)
+                        .type(lenient ? MultiMatchQueryBuilder.Type.BEST_FIELDS : MultiMatchQueryBuilder.Type.CROSS_FIELDS)
+                        .prefixLength(2)
+                        .analyzer("search_ngram")
+                        .fuzziness(lenient ? Fuzziness.AUTO : Fuzziness.ZERO)
+                        .tieBreaker(0.4f)
+                        .minimumShouldMatch(lenient ? "-34%" : "100%");
 
-            for (String lang : languages) {
-                builder.field(String.format("collector.%s.ngrams", lang), lang.equals(language) ? 1.0f : 0.6f);
-            }
-
-            collectorQuery = builder;
+        for (String lang : languages) {
+            builder.field(String.format("collector.%s.ngrams", lang), lang.equals(language) ? 1.0f : 0.6f);
         }
 
-        query4QueryBuilder.must(collectorQuery);
+        query4QueryBuilder.must(builder);
 
         // 2. Prefer records that have the full names in. For address records with housenumbers this is the main
         //    filter creterion because they have no name. Therefore boost the score in this case.
@@ -122,7 +110,7 @@ public class PhotonQueryBuilder {
 
         // 4. Rerank results for having the full name in the default language.
         query4QueryBuilder
-                .should(QueryBuilders.matchQuery(String.format("name.%s.raw", language), query));
+                .should(QueryBuilders.matchQuery(String.format("name.%s.raw", language), query).fuzziness(lenient ? Fuzziness.AUTO : Fuzziness.ZERO));
 
 
         // Weigh the resulting score by importance. Use a linear scale function that ensures that the weight
@@ -138,6 +126,8 @@ public class PhotonQueryBuilder {
                 .should(QueryBuilders.matchQuery("housenumber", query).analyzer("standard"))
                 .should(QueryBuilders.existsQuery(String.format("name.%s.raw", language)));
 
+        osmTagFilter = new OsmTagFilter();
+        
         state = State.PLAIN;
     }
 
@@ -186,39 +176,18 @@ public class PhotonQueryBuilder {
     }
 
     public PhotonQueryBuilder withOsmTagFilters(List<TagFilter> filters) {
-        for (TagFilter filter : filters) {
-            addOsmTagFilter(filter);
-        }
-        return this;
-    }
-
-    public PhotonQueryBuilder addOsmTagFilter(TagFilter filter) {
         state = State.FILTERED;
-
-        if (filter.getKind() == TagFilterKind.EXCLUDE_VALUE) {
-            appendIncludeTermQuery(QueryBuilders.boolQuery()
-                    .must(QueryBuilders.termQuery("osm_key", filter.getKey()))
-                    .mustNot(QueryBuilders.termQuery("osm_value", filter.getValue())));
-        } else {
-            QueryBuilder builder;
-            if (filter.isKeyOnly()) {
-                builder = QueryBuilders.termQuery("osm_key", filter.getKey());
-            } else if (filter.isValueOnly()) {
-                builder = QueryBuilders.termQuery("osm_value", filter.getValue());
-            } else {
-                builder = QueryBuilders.boolQuery()
-                        .must(QueryBuilders.termQuery("osm_key", filter.getKey()))
-                        .must(QueryBuilders.termQuery("osm_value", filter.getValue()));
-            }
-            if (filter.getKind() == TagFilterKind.INCLUDE) {
-                appendIncludeTermQuery(builder);
-            } else {
-                appendExcludeTermQuery(builder);
-            }
-        }
+        osmTagFilter.withOsmTagFilters(filters);
         return this;
     }
 
+    public PhotonQueryBuilder withLayerFilters(Set<String> filters) {
+        if (filters.size() > 0) {
+            layerQueryBuilder = new TermsQueryBuilder("type", filters);
+        }
+
+        return this;
+    }
 
 
     /**
@@ -231,41 +200,21 @@ public class PhotonQueryBuilder {
 
         finalQueryBuilder = QueryBuilders.boolQuery().must(finalQueryWithoutTagFilterBuilder).filter(queryBuilderForTopLevelFilter);
 
-        if (state.equals(State.FILTERED)) {
-            BoolQueryBuilder tagFilters = QueryBuilders.boolQuery();
-            if (orQueryBuilderForIncludeTagFiltering != null)
-                tagFilters.must(orQueryBuilderForIncludeTagFiltering);
-            if (andQueryBuilderForExcludeTagFiltering != null)
-                tagFilters.mustNot(andQueryBuilderForExcludeTagFiltering);
+        BoolQueryBuilder tagFilters = osmTagFilter.getTagFiltersQuery();
+        if (state.equals(State.FILTERED) && tagFilters != null) {
             finalQueryBuilder.filter(tagFilters);
         }
         
         if (bboxQueryBuilder != null) 
             queryBuilderForTopLevelFilter.filter(bboxQueryBuilder);
 
+        if (layerQueryBuilder != null)
+            queryBuilderForTopLevelFilter.filter(layerQueryBuilder);
+
         state = State.FINISHED;
 
         return finalQueryBuilder;
     }
-
-
-    private void appendIncludeTermQuery(QueryBuilder termQuery) {
-
-        if (orQueryBuilderForIncludeTagFiltering == null)
-            orQueryBuilderForIncludeTagFiltering = QueryBuilders.boolQuery();
-
-        orQueryBuilderForIncludeTagFiltering.should(termQuery);
-    }
-
-
-    private void appendExcludeTermQuery(QueryBuilder termQuery) {
-
-        if (andQueryBuilderForExcludeTagFiltering == null)
-            andQueryBuilderForExcludeTagFiltering = QueryBuilders.boolQuery();
-
-        andQueryBuilderForExcludeTagFiltering.should(termQuery);
-    }
-
 
     private enum State {
         PLAIN, FILTERED, QUERY_ALREADY_BUILT, FINISHED,

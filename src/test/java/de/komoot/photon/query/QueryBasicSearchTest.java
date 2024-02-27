@@ -39,42 +39,61 @@ public class QueryBasicSearchTest extends ESBaseTester {
     }
 
     private List<PhotonResult> search(String query) {
-        return getServer().createSearchHandler(new String[]{"en"}).search(new PhotonRequest(query, "en"));
+        return getServer().createSearchHandler(new String[]{"en"}, 1).search(new PhotonRequest(query, "en"));
     }
 
 
     @Test
     public void testSearchByDefaultName() {
         Importer instance = makeImporter();
-        instance.add(createDoc("name", "Muffle Flu"));
+        instance.add(createDoc("name", "Muffle Flu"), 0);
         instance.finish();
         refresh();
 
-        assertEquals(1, search("muffle flu").size());
-        assertEquals(1, search("flu").size());
-        assertEquals(1, search("muffle").size());
-        assertEquals(1, search("mufle flu").size());
-        assertEquals(1, search("muffle flu 9").size());
-        assertEquals(0, search("huffle fluff").size());
+        assertAll("default name",
+                () -> assertEquals(1, search("muffle flu").size()),
+                () -> assertEquals(1, search("flu").size()),
+                () -> assertEquals(1, search("muffle").size()),
+                () -> assertEquals(1, search("mufle flu").size()),
+                () -> assertEquals(1, search("muffle flu 9").size()),
+                () -> assertEquals(0, search("huffle fluff").size())
+        );
     }
 
+    @Test
+    public void testSearchNameSkipTerms() {
+        Importer instance = makeImporter();
+        instance.add(createDoc("name", "Hunted House Hotel"), 0);
+        instance.finish();
+        refresh();
+
+        assertAll("default name",
+                () -> assertEquals(1, search("hunted").size()),
+                () -> assertEquals(1, search("hunted hotel").size()),
+                () -> assertEquals(1, search("hunted house hotel").size()),
+                () -> assertEquals(1, search("hunted house hotel 7").size()),
+                () -> assertEquals(1, search("hunted hotel 7").size())
+        );
+    }
     @Test
     public void testSearchByAlternativeNames() {
         Importer instance = makeImporter();
         instance.add(createDoc("name", "original", "alt_name", "alt", "old_name", "older", "int_name", "int",
                                "loc_name", "local", "reg_name", "regional", "addr:housename", "house",
-                               "other_name", "other"));
+                               "other_name", "other"), 0);
         instance.finish();
         refresh();
 
-        assertEquals(1, search("original").size());
-        assertEquals(1, search("alt").size());
-        assertEquals(1, search("older").size());
-        assertEquals(1, search("int").size());
-        assertEquals(1, search("local").size());
-        assertEquals(1, search("regional").size());
-        assertEquals(1, search("house").size());
-        assertEquals(0, search("other").size());
+        assertAll("altnames",
+                () -> assertEquals(1, search("original").size()),
+                () -> assertEquals(1, search("alt").size()),
+                () -> assertEquals(1, search("older").size()),
+                () -> assertEquals(1, search("int").size()),
+                () -> assertEquals(1, search("local").size()),
+                () -> assertEquals(1, search("regional").size()),
+                () -> assertEquals(1, search("house").size()),
+                () -> assertEquals(0, search("other").size())
+        );
     }
 
     @Test
@@ -88,39 +107,62 @@ public class QueryBasicSearchTest extends ESBaseTester {
         address.put("state", "Estado");
 
         Importer instance = makeImporter();
-        instance.add(createDoc("name", "Castillo").address(address));
+        instance.add(createDoc("name", "Castillo").address(address), 0);
         instance.finish();
         refresh();
 
-        assertEquals(1, search("castillo").size());
-        assertEquals(1, search("castillo callino").size());
-        assertEquals(1, search("castillo quartier madrid").size());
-        assertEquals(1, search("castillo block montagna estado").size());
+        assertAll("name and address",
+                () -> assertEquals(1, search("castillo").size()),
+                () -> assertEquals(1, search("castillo callino").size()),
+                () -> assertEquals(1, search("castillo quartier madrid").size()),
+                () -> assertEquals(1, search("castillo block montagna estado").size()),
 
-        assertEquals(0, search("castillo state thing").size());
+                () -> assertEquals(0, search("castillo state thing").size())
+        );
+    }
+
+    @Test
+    public void testSearchMustContainANameTerm() {
+        Importer instance = makeImporter();
+        instance.add(createDoc("name", "Palermo").address(Collections.singletonMap("state", "Sicilia")), 0);
+        instance.finish();
+        refresh();
+
+        assertAll("find names",
+                () -> assertEquals(1, search("Palermo").size()),
+                () -> assertEquals(1, search("Paler").size()),
+                () -> assertEquals(1, search("Palermo Sici").size()),
+                () -> assertEquals(1, search("Sicilia, Paler").size()),
+                () -> assertEquals(0, search("Sicilia").size()),
+                () -> assertEquals(0, search("Sici").size())
+        );
     }
 
     @Test
     public void testSearchWithHousenumberNamed() {
         Importer instance = makeImporter();
-        instance.add(createDoc("name", "Edeka").houseNumber("5").address(Collections.singletonMap("street", "Hauptstrasse")));
+        instance.add(createDoc("name", "Edeka").houseNumber("5").address(Collections.singletonMap("street", "Hauptstrasse")), 0);
         instance.finish();
         refresh();
 
-        assertEquals(1, search("hauptstrasse 5").size());
-        assertEquals(1, search("edeka, hauptstrasse 5").size());
-        assertEquals(1, search("edeka, hauptstr 5").size());
-        assertEquals(1, search("edeka, hauptstrasse").size());
+        assertAll("named housenumber",
+                () -> assertEquals(1, search("hauptstrasse 5").size()),
+                () -> assertEquals(1, search("edeka, hauptstrasse 5").size()),
+                () -> assertEquals(1, search("edeka, hauptstr 5").size()),
+                () -> assertEquals(1, search("edeka, hauptstrasse").size())
+        );
     }
 
     @Test
     public void testSearchWithHousenumberUnnamed() {
         Importer instance = makeImporter();
-        instance.add(createDoc().houseNumber("5").address(Collections.singletonMap("street", "Hauptstrasse")));
+        instance.add(createDoc().houseNumber("5").address(Collections.singletonMap("street", "Hauptstrasse")), 0);
         instance.finish();
         refresh();
 
-        assertEquals(1, search("hauptstrasse 5").size());
-        assertEquals(0, search("hauptstrasse").size());
+        assertAll("unnamed housenumber",
+                () -> assertEquals(1, search("hauptstrasse 5").size()),
+                () -> assertEquals(0, search("hauptstrasse").size())
+        );
     }
 }

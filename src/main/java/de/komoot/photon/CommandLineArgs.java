@@ -23,11 +23,14 @@ public class CommandLineArgs {
     @Parameter(names = "-nominatim-import", description = "import nominatim database into photon (this will delete previous index)")
     private boolean nominatimImport = false;
 
+    @Parameter(names = "-nominatim-update-init-for", description = "set up tracking of updates in the Nominatim database for the given user and exit")
+    private String nominatimUpdateInit = null;
+
     @Parameter(names = "-nominatim-update", description = "fetch updates from nominatim database into photon and exit (this updates the index only without offering an API)")
     private boolean nominatimUpdate = false;
 
     @Parameter(names = "-languages", description = "languages nominatim importer should import and use at run-time, comma separated (default is 'en,fr,de,it')", converter = StringArrayConverter.class)
-    private String[] languages = new String[]{"en", "de", "fr", "it"};
+    private String[] languages = new String[]{};
 
     @Parameter(names = "-default-language", description = "language to return results in when no explicit language is choosen by the user")
     private String defaultLanguage = "default";
@@ -40,6 +43,9 @@ public class CommandLineArgs {
 
     @Parameter(names = "-synonym-file", description = "file with synonym and classification terms")
     private String synonymFile = null;
+
+    @Parameter(names = "-query-timeout", description = "Time after which to cancel queries to the ES database (in seconds).")
+    private int queryTimeout = 7;
 
     @Parameter(names = "-json", description = "import nominatim database and dump it to a json like files in (useful for developing)")
     private String jsonDump = null;
@@ -57,7 +63,7 @@ public class CommandLineArgs {
     private String user = "nominatim";
 
     @Parameter(names = "-password", description = "postgres password (default '')")
-    private String password = "";
+    private String password = null;
 
     @Parameter(names = "-data-dir", description = "data directory (default '.')")
     private String dataDirectory = new File(".").getAbsolutePath();
@@ -79,5 +85,17 @@ public class CommandLineArgs {
 
     @Parameter(names = "-h", description = "show help / usage")
     private boolean usage = false;
+
+    public String[] getLanguages(boolean useDefaultIfEmpty) {
+        if (useDefaultIfEmpty && languages.length == 0) {
+            return new String[]{"en", "de", "fr", "it"};
+        }
+
+        return languages;
+    }
+
+    public String[] getLanguages() {
+        return getLanguages(true);
+    }
 }
 
