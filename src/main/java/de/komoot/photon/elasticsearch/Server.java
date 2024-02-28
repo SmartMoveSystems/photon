@@ -280,4 +280,9 @@ public class Server {
     public ReverseHandler createReverseHandler(int queryTimeoutSec) {
         return new ElasticsearchReverseHandler(esClient, queryTimeoutSec);
     }
+
+    public Client getClient()
+    {
+        return esClient;
+    }
 }

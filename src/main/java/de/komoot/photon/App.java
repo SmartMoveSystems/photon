@@ -35,7 +35,15 @@ public class App {
         }
 
         boolean shutdownES = false;
-        final Server esServer = new Server(args.getDataDirectory()).start(args.getCluster(), args.getTransportAddresses());
+        Server esServer = null;
+        try
+        {
+            esServer = new Server(args.getDataDirectory()).start(args.getCluster(), args.getTransportAddresses());
+        }
+        catch(Exception e)
+        {
+            e.printStackTrace();
+        }
         try {
             log.info("Make sure that the ES cluster is ready, this might take some time.");
             esServer.waitForReady();
@@ -183,8 +191,9 @@ public class App {
         get("reverse", new ReverseSearchRequestHandler("reverse", reverseHandler, dbProperties.getLanguages(), args.getDefaultLanguage()));
         get("reverse/", new ReverseSearchRequestHandler("reverse/", reverseHandler, dbProperties.getLanguages(), args.getDefaultLanguage()));
 
-        get("add", new AddHandler("api", server, langs, args.getDefaultLanguage()));
-        get("add/", new AddHandler("api/", server, langs, args.getDefaultLanguage()));
+        SearchHandler addHandler = server.createSearchHandler(langs, args.getQueryTimeout());
+        get("add", new AddHandler("api", addHandler, server, langs, args.getDefaultLanguage()));
+        get("add/", new AddHandler("api/", addHandler, server, langs, args.getDefaultLanguage()));
         
         if (args.isEnableUpdateApi()) {
             // setup update API
